@@ -1,0 +1,483 @@
+---
+title: "Getting Started in Fixed/Random Effects Models using R"
+output: html_notebook
+---
+
+## Getting Started in Fixed/Random Effects Models using R
+Souce: https://rstudio-pubs-static.s3.amazonaws.com/372492_3e05f38dd3f248e89cdedd317d603b9a.html
+
+### Libraries and Data
+
+```{r}
+library(tidyverse) # Modern data science library 
+#install.packages("plm")
+library(plm)       # Panel data analysis library
+library(car)       # Companion to applied regression 
+#install.packages("gplots")
+library(gplots)    # Various programing tools for plotting data
+#install.packages("tseries")
+library(tseries)   # For timeseries analysis
+#install.packages("lmtest")
+library(lmtest)    # For hetoroskedasticity analysis
+```
+
+```{r}
+dataPanel101 <- read_csv("dataPanel101.csv")
+
+head(dataPanel101)
+```
+Declare the dataset as panel data
+```{r}
+dataPanel101 <- pdata.frame(dataPanel101, index=c("country","year"))
+```
+
+```{r}
+dataPanel101
+```
+
+```{r}
+dataPanel102 <- dataPanel101
+dataPanel102$y <- dataPanel102$y/1000000
+```
+
+
+
+### EDA
+```{r fig.height=6, fig.width=8}
+coplot(y ~ year|country, type="b", data=dataPanel102) 
+```
+The bars at top indicate the countries position from left to right starting on the bottom row
+
+
+```{r fig.height=6, fig.width=8}
+scatterplot(y~year|country, data=dataPanel102)
+
+```
+
+Межстрановая разнородность
+Удобный способ визуализации в принципе
+```{r}
+plotmeans(y ~ country, data = dataPanel102)
+```
+По годам
+```{r}
+plotmeans(y ~ year, data = dataPanel102)
+```
+
+### Basic OLS model
+```{r}
+ols <-lm(y ~ x1, data = dataPanel101)
+summary(ols)
+
+```
+
+```{r fig.height=6, fig.width=8}
+par(mfrow=c(1,2))
+qqPlot(ols)
+## [1] 41 47
+plot(y ~ x1, data=dataPanel101)
+```
+Let's use Country-specific Dummy Variable  (LSDV Model)
+```{r}
+fixed.dum <-lm(y ~ x1 + factor(country) - 1, data = dataPanel101)
+summary(fixed.dum)
+```
+Заметим, что с учетом межстрановой гетерогенности (контроллируя страны) x1 стал значимым.
+
+```{r fig.height=6, fig.width=8}
+yhat <- fixed.dum$fitted
+scatterplot(yhat ~ dataPanel101$x1 | dataPanel101$country,  xlab ="x1", ylab ="yhat", boxplots = FALSE,smooth = FALSE)
+abline(lm(dataPanel101$y~dataPanel101$x1),lwd=3, col="red")
+```
+Красной линией слева-направа - OLS
+```{r}
+install.packages("apsrtable")
+library("apsrtable")
+```
+FE using plm
+within = dummy for countries, FE
+```{r}
+fixed <- plm(y ~ x1, data=dataPanel101, model="within")
+summary(fixed)
+```
+
+Комментарии по summary:
+1. n = 7 - колво групп/панелей, T = 10 = years, N = 70 obs
+2. Если p-value внизу (0.028892) < 0.05, то модель - ок. Это тест, проверяющий равенство всех коэффициентов нулю.
+
+```{r}
+# Display the fixed effects (constants for each country)
+fixef(fixed)
+```
+The coeff of x1 indicates how much Y changes overtime, on average per country, when X increases by one unit.
+
+ЧТО ЛУЧШЕ: OLS или FE
+```{r}
+# Testing for fixed effects, null: OLS better than fixed
+pFtest(fixed, ols)
+```
+If the p-value is < 0.05 then the fixed effects model is a better choice
+
+### Random Effects: Random Intercept, Partial Pooling
+```{r echo=FALSE}
+random <- plm(y ~ x1, data = dataPanel101, model = "random")
+summary(random)
+```
+Interpretation of the coefficients is tricky since they include both the within-entity and between-entity effects. In the case of TSCS data represents the average effect of X over Y when X changes across time and between countries by one unit.
+```{r}
+# тоже самое
+random <- plm(y ~ x1, data=dataPanel101, index=c("country", "year"), model="random")
+summary(random)
+```
+ТЕСТ ХАУСМАНА: Random vs FE
+To decide between fixed or random effects you can run a Hausman test where the null hypothesis is that the preferred model is random effects vs. the alternative the fixed effects (see Green, 2008, chapter 9). It basically tests whether the unique errors are correlated with the regressors, the null hypothesis is they are not. If the p-value is significant (for example <0.05) then use fixed effects, if not use random effects.
+```{r}
+phtest(fixed, random)
+# если меньше 0,05, то используем fixed
+```
+### Диагностика и тесты для FE/Random Effects моделей
+
+#### 4.5.1 Time-fixed effects testing
+
+```{r}
+fixed.time <- plm(y ~ x1 + factor(year), data=dataPanel101, model="within")
+summary(fixed.time)
+```
+
+Тест который проверяет равенство дамми-коэфов для лет нулю.
+```{r}
+# Testing time-fixed effects. The null is that no time-fixed effects are needed
+pFtest(fixed.time, fixed)
+```
+p-value выше больше 0.05. Не отрицаем гипотезу о том что коэфы равны нулю. Значит нам не нужны дамми для лет.
+
+```{r}
+plmtest(fixed, c("time"), type=("bp"))
+```
+If the p value < 0.05 then use time-fixed effects. In this example, no need to use time-fixed effects.
+
+
+#### 4.5.2 Random effects vs Pooled OLS
+
+
+The LM test helps you decide between a random effects regression and a simple OLS regression.
+
+The null hypothesis in the LM test is that variances across entities is zero. This is, no significant difference across units (i.e. no panel effect).
+```{r}
+pool <- plm(y ~ x1, data=dataPanel101, model="pooling")
+summary(pool)
+```
+
+```{r}
+# Breusch-Pagan Lagrange Multiplier for random effects. Null is no panel effect (i.e. OLS better).
+plmtest(pool, type=c("bp"))
+```
+Here we failed to reject the null and conclude that random effects is not appropriate. This is, no evidence of significant differences across countries, therefore you can run a simple OLS regression.
+
+####4.5.3 Cross-sectional dependence testing
+
+Testing contemporaneous correlation using both the Breusch-Pagan LM test of independence and Pasaran CD test
+
+According to Baltagi, cross-sectional dependence is a problem in macro panels with long time series. This is not much of a problem in micro panels (few years and large number of cases).
+
+The null hypothesis in the B-P/LM and Pasaran CD tests of independence is that residuals across entities are not correlated. B-P/LM and Pasaran CD (cross-sectional dependence) tests are used to test whether the residuals are correlated across entities. Cross-sectional dependence can lead to bias in tests results (also called contemporaneous correlation).
+
+H0) The null is that there is not cross-sectional dependence
+```{r}
+fixed <- plm(y ~ x1, data=dataPanel101, model="within")
+pcdtest(fixed, test = c("lm"))
+```
+
+```{r}
+pcdtest(fixed, test = c("cd"))
+```
+Because p-value > 0.05, we conclude that there is NO cross-sectional dependence
+
+Had cross-sectional dependence be present Hoechle suggests to use Driscoll and Kraay standard errors 
+
+
+4.5.4 Serial correlation testing
+Serial correlation tests apply to macro panels with long time series. Not a problem in micro panels (with very few years).
+
+H0) The null is that there is not serial correlation.
+
+
+```{r}
+#Breusch-Godfrey/Wooldridge test for serial correlation in panel models
+pbgtest(fixed)
+```
+Because p-value > 0.05, we conclude that there is NO serial correlation
+
+#### 4.5.5 Unit roots/stationarity testing
+The Dickey-Fuller test to check for stochastic trends.
+
+H0) The null hypothesis is that the series has a unit root (i.e. non-stationary)
+
+If unit root is present you can take the first difference of the variable.
+```{r}
+adf.test(dataPanel101$y, k=2)
+```
+Because p-value < 0.05, we conclude that the series does NOT have unit root. In other words, the series is stationary
+
+#### 4.5.6 Heteroskedasticity testing
+H0) The null hypothesis for the Breusch-Pagan test is homoskedasticity
+
+
+```{r}
+# Breusch-Pagan test for Heteroskedasticity
+bptest(y ~ x1 + factor(country), data = dataPanel101, studentize=F)
+```
+Because p-value < 0.05, we detect hetersokedasticity
+
+If hetersokedasticity is detected we need to use a robust covariance matrix (Sandwich estimator) to account for it
+
+##### 4.5.6.1 Controlling for heteroskedasticity: Random effects
+The –vcovHC– function estimates three heteroskedasticity-consistent covariance estimators:
+
+- white1" - for general heteroskedasticity but no serial correlation. Recommended for random effects.
+- white2" - is “white1” restricted to a common variance within groups. Recommended for random effects.
+- arellano" - both heteroskedasticity and serial correlation. Recommended for fixed effects.
+
+The following options apply:
+
+HC0 - heteroskedasticity consistent. The default.
+HC1,HC2, HC3 – Recommended for small samples. HC3 gives less weight to influential observations.
+HC4 - small samples with influential observations HAC - heteroskedasticity and autocorrelation consistent (type ?vcovHAC for more details)
+
+```{r}
+# Original coefficients
+coeftest(random)
+```
+
+```{r}
+# Heteroskedasticity consistent coefficients
+coeftest(random, vcovHC)
+```
+
+```{r}
+# Heteroskedasticity consistent coefficients, type 3
+coeftest(random, vcovHC(random, type = "HC3")) 
+```
+
+```{r}
+# The following shows the HC standard errors of the coefficients
+t(sapply(c("HC0", "HC1", "HC2", "HC3", "HC4"), function(x) sqrt(diag(vcovHC(random, type = x)))))/1000000
+```
+##### 4.5.6.2 Controlling for heteroskedasticity: Fixed effects
+```{r}
+# The following shows the HC standard errors of the coefficients
+t(sapply(c("HC0", "HC1", "HC2", "HC3", "HC4"), function(x) sqrt(diag(vcovHC(fixed, type = x)))))
+```
+### A very basic tutorial for performing linear mixed effects analyses
+```{r}
+library(lme4)
+```
+
+```{r}
+politeness= read.csv("http://www.bodowinter.com/tutorial/politeness_data.csv")
+```
+
+```{r}
+head(politeness)
+
+
+```
+
+```{r}
+str(politeness)
+```
+
+```{r}
+which(is.na(politeness)==T)
+```
+The difference in politeness level is represented in the column called “attitude”.
+In that column, “pol” stands for polite and “inf” for informal.
+
+The interesting random effects for us are in the column “subject” and “scenario”, the latter being the name of the item column (remember the different scenarios like “asking for a favor”?).
+```{r}
+boxplot(frequency ~ attitude*gender,
+        col=c("white","lightgray"), data = politeness)
+```
+inf = informal
+pol = polite
+
+So, let’s add random intercepts for subjects and items (remember that items are
+called “scenarios” here):
+
+```{r}
+politeness.model = lmer(frequency ~ attitude + (1|subject) + 
+                          (1|scenario), data=politeness)
+```
+The last command created a model that used the fixed effect “attitude” (polite vs.
+informal) to predict voice pitch, controlling for by-subject and by-item variability
+
+```{r}
+summary(politeness.model)
+```
+t-value for fixed effects = estimate/std error
+
+Intercept = 202 = посередине между мужчинами и женщинами в неформальном разгвооре
+
+Let’s add gender as an additional fixed effect:
+```{r}
+politeness.model = lmer(frequency ~ attitude + gender + (1|subject) + 
+                          (1|scenario), data=politeness)
+
+summary(politeness.model)
+```
+Вариация фиксированного эффекта subject сильно изменилась
+
+Интерсепт = 256 = среднее для неформального разговора женщины
+
+#### СТАТИСТИЧЕСКАЯ ЗНАЧИМОСТЬ
+
+Используем Likelihood Ratio для получения p-values
+
+In both cases, we compared a full model (with the fixed effects in question)
+against a reduced model without the effects in question. 
+
+In each case, we conclude that a fixed effect is significant if the difference between the likelihood of these two models is significant. 
+
+```{r}
+politeness.null = lmer(frequency ~ gender + (1|subject) + (1|scenario),
+                       data=politeness, REML=FALSE)
+```
+REML=FALSE.
+Don’t worry about it too much – but in case you’re interested, this changes some internal stuff (in particular, the likelihood estimator), and it is necessary to do this when you compare models using the likelihood ratio test 
+
+Then, we re-do the full model above, this time also with REML=FALSE:
+```{r}
+
+politeness.model = lmer(frequency ~ attitude + gender +(1|subject) +
+                          (1|scenario), data=politeness, REML=FALSE)
+```
+
+```{r}
+anova(politeness.null,politeness.model)
+```
+
+2 You might wonder why we’re doing a Chi-Square test here. 
+
+There’s a lot of technical detail here, but the main thing is that there’s a theorem, called Wilk’s Theorem, which states that negative two times the log likelihood ratio of two models approaches a Chi-Square distribution with degrees of freedom of the number of parameters that differ between the models (in this case, only “attitude”). 
+
+
+Do note, also, that some people don’t like “straight-jacketing” likelihood into the classical nullhypothesis significance testing framework that we’re following here, and so they would disagree with the interpretation of likelihood the way we used it in the likelihood ratio test.
+
+Что делать в случае взаимодействия
+Например мужчины говорят громче когда они вежливы а женщины наоборот. Или для женщин есть различие а для мужчин нет
+
+Тогда
+
+full model: frequency ~ attitude*gender
+reduced model: frequency ~ attitude + gender
+In R, interactions between two factors are specified with a “*”
+
+If you compare the above models in a likelihood ratio test using the anova()
+function, then you would get a p-value that gives you the significance of the
+interaction. If this comparison is significant, you know that attitude and gender
+are significantly inter-dependent on each other. If this is comparison is not
+significant, there is no significant inter-dependence
+
+#### Super-crucial: Random slopes versus random intercepts
+```{r}
+coef(politeness.model)
+```
+
+You see that each scenario and each subject is assigned a different intercept.
+
+That’s what we would expect, given that we’ve told the model with “(1|subject)” and “(1|scenario)” to take by-subject and by-item variability into account.
+
+But not also that the fixed effects (attitude and gender) are all the same for all subjects and items. Our model is what is called a random intercept model. 
+
+In this model, we account for baseline-differences in pitch, but we assume that whatever the effect of politeness is, it’s going to be the same for all subjects and items
+
+В НАШЕЙ МОДЕЛИ МЫ ДУМАЕМ ЧТО ЭФФЕКТ ОТ ПЕРЕХОДА НА ВЕЖЛИВОСТЬ ОДИНАКОВ ДЛЯ ВСЕХ ТЕМ И ПОЛОВ И ВСЕХ ЛЮДЕЙ
+
+Поэтому нам нужен RANDOM SLOPE для отображения эффекта перехода на вежливость
+
+```{r}
+politeness.model = lmer(frequency ~ attitude + gender + (1+attitude|subject)+ (1+attitude|scenario), data=politeness, REML=FALSE)
+```
+
+```{r}
+coef(politeness.model)
+```
+O.k., let’s try to obtain a p-value. We keep our model from above
+(politeness.model) and compare it to a new null model in a likelihood ratio
+test. Let’s construct the null model first
+
+Т.Е. УЗНАЕМ НУЖЕН ЛИ ATTITUDE
+```{r}
+politeness.null = lmer(frequency ~ gender +
+(1+attitude|subject) + (1+attitude|scenario),
+data=politeness, REML=FALSE)
+```
+```{r}
+anova(politeness.null,politeness.model)
+```
+
+```{r}
+install.packages('foreign')
+library(foreign)
+
+union <- read.dta("http://data.princeton.edu/wws509/datasets/union.dta")
+```
+
+```{r}
+head(union)
+```
+
+```{r}
+
+```
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
