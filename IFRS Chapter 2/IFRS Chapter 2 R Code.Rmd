@@ -1,0 +1,563 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## EXAMPLE 2.3.1 SCORECARD DEVELOPMENT
+### 1. Default flag definition and data preparation
+```{r}
+library(readr)
+# read through import tool 
+chap2oneypd <- read_delim("IFRS Chapter 2/chap2oneypd.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+oneypd <- chap2oneypd
+oneypd
+```
+
+```{r}
+glimpse(oneypd)
+```
+
+```{r echo=FALSE}
+library(vars)
+library(lubridate)
+```
+
+```{r}
+## Date format
+#oneypd$maturity_date <- dmy(oneypd$maturity_date)
+#oneypd$origination_date <- dmy(oneypd$origination_date)
+
+oneypd <- dplyr::mutate_at(oneypd, vars(contains('date')),
+                           funs(dmy))
+oneypd <- dplyr::mutate_at(oneypd, vars(contains('date')),
+                           funs(as.Date))
+oneypd
+
+```
+
+```{r}
+class(oneypd$origination_date)
+```
+
+
+```{r}
+# 1.1.3. Round arrears count fields
+oneypd$max_arrears_12m<- round(oneypd$max_arrears_12m,4)
+oneypd$arrears_months<- round(oneypd$arrears_months,4)
+
+warnings()
+```
+
+```{r}
+# 1.2. Default flag definition
+
+oneypd <- oneypd %>% 
+  mutate(
+    default_event = if_else(oneypd$arrears_event == 1 |
+                            oneypd$term_expiry_event == 1|
+                              oneypd$bankrupt_event == 1, 1, 0)
+)
+
+head(oneypd)
+```
+
+```{r}
+# 1.3. Database split in train and test samples
+# Recode default event variables for more convenient use
+# 0-default, 1-non-default
+
+oneypd$default_flag <- dplyr::if_else(oneypd$default_event == 1,0,1)
+
+# Perform a stratified sampling: 70% train and 30% test
+library(caret)
+
+oneypd <- oneypd %>% mutate_if(is.character, as.numeric)
+
+set.seed(2122)
+train.index <- caret::createDataPartition(oneypd$default_event, p = .7, list = FALSE)
+
+train <- oneypd[ train.index,]
+test <- oneypd[-train.index,]
+
+```
+
+```{r}
+# Code to use for binning (Section 2. Univariate analysis)
+# 2.1 woe based on binning analysis
+
+#Bureau score:
+train$woe_bureau_score<- rep(NA, length(train$bureau_score))
+train$woe_bureau_score[which(is.na(train$bureau_score))] <- -0.0910
+train$woe_bureau_score[which(train$bureau_score <= 308)] <- -0.7994
+train$woe_bureau_score[which(train$bureau_score > 308 & train$bureau_score <= 404)] <- -0.0545
+train$woe_bureau_score[which(train$bureau_score > 404 & train$bureau_score <= 483)] <-  0.7722
+train$woe_bureau_score[which(train$bureau_score > 483)] <-  1.0375
+
+test$woe_bureau_score<- rep(NA, length(test$bureau_score))
+test$woe_bureau_score[which(is.na(test$bureau_score))] <- -0.0910
+test$woe_bureau_score[which(test$bureau_score <= 308)] <- -0.7994
+test$woe_bureau_score[which(test$bureau_score > 308 & test$bureau_score <= 404)] <- -0.0545
+test$woe_bureau_score[which(test$bureau_score > 404 & test$bureau_score <= 483)] <-  0.7722
+test$woe_bureau_score[which(test$bureau_score > 483)] <-  1.0375
+
+#CC utilization:
+
+train$woe_cc_util<- rep(NA, length(train$cc_util))
+train$woe_cc_util[which(is.na(train$cc_util))] <- 0
+train$woe_cc_util[which(train$cc_util <= 0.55)] <- 1.8323
+train$woe_cc_util[which(train$cc_util > 0.55 & train$cc_util <= 0.70)] <- -0.4867
+train$woe_cc_util[which(train$cc_util > 0.70 & train$cc_util <= 0.85)] <- -1.1623
+train$woe_cc_util[which(train$cc_util > 0.85)] <- -2.3562
+
+test$woe_cc_util<- rep(NA, length(test$cc_util))
+test$woe_cc_util[which(is.na(test$cc_util))] <- 0
+test$woe_cc_util[which(test$cc_util <= 0.55)] <- 1.8323
+test$woe_cc_util[which(test$cc_util > 0.55 & test$cc_util <= 0.70)] <- -0.4867
+test$woe_cc_util[which(test$cc_util > 0.70 & test$cc_util <= 0.85)] <- -1.1623
+test$woe_cc_util[which(test$cc_util > 0.85)] <- -2.3562
+
+#Number of CCJ events:
+
+train$woe_num_ccj<- rep(NA, length(train$num_ccj))
+train$woe_num_ccj[which(is.na(train$num_ccj))] <- -0.0910
+train$woe_num_ccj[which(train$num_ccj <= 0)] <- 0.1877
+train$woe_num_ccj[which(train$num_ccj > 0 & train$num_ccj <= 1)] <- -0.9166
+train$woe_num_ccj[which(train$num_ccj > 1)] <- -1.1322
+
+test$woe_num_ccj<- rep(NA, length(test$num_ccj))
+test$woe_num_ccj[which(is.na(test$num_ccj))] <- -0.0910
+test$woe_num_ccj[which(test$num_ccj <= 0)] <- 0.1877
+test$woe_num_ccj[which(test$num_ccj > 0 & test$num_ccj <= 1)] <- -0.9166
+test$woe_num_ccj[which(test$num_ccj > 1)] <- -1.1322
+
+#Maximum arrears in previous 12 months:
+
+train$woe_max_arrears_12m<- rep(NA, length(train$max_arrears_12m))
+train$woe_max_arrears_12m[which(is.na(train$max_arrears_12m))] <- 0
+train$woe_max_arrears_12m[which(train$max_arrears_12m <= 0)] <- 0.7027
+train$woe_max_arrears_12m[which(train$max_arrears_12m > 0 & train$max_arrears_12m <= 1)] <- -0.8291
+train$woe_max_arrears_12m[which(train$max_arrears_12m > 1 & train$max_arrears_12m <= 1.4)] <- -1.1908
+train$woe_max_arrears_12m[which(train$max_arrears_12m > 1.4)] <- -2.2223
+
+test$woe_max_arrears_12m<- rep(NA, length(test$max_arrears_12m))
+test$woe_max_arrears_12m[which(is.na(test$max_arrears_12m))] <- 0
+test$woe_max_arrears_12m[which(test$max_arrears_12m <= 0)] <- 0.7027
+test$woe_max_arrears_12m[which(test$max_arrears_12m > 0 & test$max_arrears_12m <= 1)] <- -0.8291
+test$woe_max_arrears_12m[which(test$max_arrears_12m > 1 & test$max_arrears_12m <= 1.4)] <- -1.1908
+test$woe_max_arrears_12m[which(test$max_arrears_12m > 1.4)] <- -2.2223
+
+#Maximum arrears balance in previous 6 months:
+train$woe_max_arrears_bal_6m<- rep(NA, length(train$max_arrears_bal_6m))
+train$woe_max_arrears_bal_6m[which(is.na(train$max_arrears_bal_6m))] <- 0
+train$woe_max_arrears_bal_6m[which(train$max_arrears_bal_6m <= 0)] <- 0.5771
+train$woe_max_arrears_bal_6m[which(train$max_arrears_bal_6m > 0 & train$max_arrears_bal_6m <= 300)] <- -0.7818
+train$woe_max_arrears_bal_6m[which(train$max_arrears_bal_6m > 300 & train$max_arrears_bal_6m <= 600)] <- -1.2958
+train$woe_max_arrears_bal_6m[which(train$max_arrears_bal_6m > 600 & train$max_arrears_bal_6m <= 900)] <- -1.5753
+train$woe_max_arrears_bal_6m[which(train$max_arrears_bal_6m > 900)] <- -2.2110
+
+test$woe_max_arrears_bal_6m<- rep(NA, length(test$max_arrears_bal_6m))
+test$woe_max_arrears_bal_6m[which(is.na(test$max_arrears_bal_6m))] <- 0
+test$woe_max_arrears_bal_6m[which(test$max_arrears_bal_6m <= 0)] <- 0.5771
+test$woe_max_arrears_bal_6m[which(test$max_arrears_bal_6m > 0 & test$max_arrears_bal_6m <= 300)] <- -0.7818
+test$woe_max_arrears_bal_6m[which(test$max_arrears_bal_6m > 300 & test$max_arrears_bal_6m <= 600)] <- -1.2958
+test$woe_max_arrears_bal_6m[which(test$max_arrears_bal_6m > 600 & test$max_arrears_bal_6m <= 900)] <- -1.5753
+test$woe_max_arrears_bal_6m[which(test$max_arrears_bal_6m > 900)] <- -2.2110
+
+#Employment length (years):
+
+train$woe_emp_length<- rep(NA, length(train$emp_length))
+train$woe_emp_length[which(is.na(train$emp_length))] <- 0
+train$woe_emp_length[which(train$emp_length <= 2)] <- -0.7514
+train$woe_emp_length[which(train$emp_length > 2 & train$emp_length <= 4)] <- -0.3695
+train$woe_emp_length[which(train$emp_length > 4 & train$emp_length <= 7)] <-  0.1783
+train$woe_emp_length[which(train$emp_length > 7)] <- 0.5827
+
+test$woe_emp_length<- rep(NA, length(test$emp_length))
+test$woe_emp_length[which(is.na(test$emp_length))] <- 0
+test$woe_emp_length[which(test$emp_length <= 2)] <- -0.7514
+test$woe_emp_length[which(test$emp_length > 2 & test$emp_length <= 4)] <- -0.3695
+test$woe_emp_length[which(test$emp_length > 4 & test$emp_length <= 7)] <-  0.1783
+test$woe_emp_length[which(test$emp_length > 7)] <- 0.5827
+
+#Months since recent CC delinquency:
+train$woe_months_since_recent_cc_delinq<- rep(NA, length(train$months_since_recent_cc_delinq))
+train$woe_months_since_recent_cc_delinq[which(is.na(train$months_since_recent_cc_delinq))] <- 0
+train$woe_months_since_recent_cc_delinq[which(train$months_since_recent_cc_delinq <= 6)] <- -0.4176
+train$woe_months_since_recent_cc_delinq[which(train$months_since_recent_cc_delinq > 6 & train$months_since_recent_cc_delinq <= 11)] <- -0.1942
+train$woe_months_since_recent_cc_delinq[which(train$months_since_recent_cc_delinq > 11)] <-  1.3166
+
+test$woe_months_since_recent_cc_delinq<- rep(NA, length(test$months_since_recent_cc_delinq))
+test$woe_months_since_recent_cc_delinq[which(is.na(test$months_since_recent_cc_delinq))] <- 0
+test$woe_months_since_recent_cc_delinq[which(test$months_since_recent_cc_delinq <= 6)] <- -0.4176
+test$woe_months_since_recent_cc_delinq[which(test$months_since_recent_cc_delinq > 6 & test$months_since_recent_cc_delinq <= 11)] <- -0.1942
+test$woe_months_since_recent_cc_delinq[which(test$months_since_recent_cc_delinq > 11)] <-  1.3166
+
+#Annual income:
+
+train$woe_annual_income<- rep(NA, length(train$annual_income))
+train$woe_annual_income[which(is.na(train$annual_income))] <- 0
+train$woe_annual_income[which(train$annual_income <= 35064)] <- -1.8243
+train$woe_annual_income[which(train$annual_income > 35064 & train$annual_income <= 41999)] <- -0.8272
+train$woe_annual_income[which(train$annual_income > 41999 & train$annual_income <= 50111)] <- -0.3294
+train$woe_annual_income[which(train$annual_income > 50111 & train$annual_income <= 65050)] <-  0.2379
+train$woe_annual_income[which(train$annual_income > 65050)] <-  0.6234
+
+test$woe_annual_income<- rep(NA, length(test$annual_income))
+test$woe_annual_income[which(is.na(test$annual_income))] <- 0
+test$woe_annual_income[which(test$annual_income <= 35064)] <- -1.8243
+test$woe_annual_income[which(test$annual_income > 35064 & test$annual_income <= 41999)] <- -0.8272
+test$woe_annual_income[which(test$annual_income > 41999 & test$annual_income <= 50111)] <- -0.3294
+test$woe_annual_income[which(test$annual_income > 50111 & test$annual_income <= 65050)] <-  0.2379
+test$woe_annual_income[which(test$annual_income > 65050)] <-  0.6234
+
+```
+
+```{r}
+# 2. Univariate analysis
+# Information Value (IV) assessment
+library(smbinning)
+iv_analysis<- smbinning.sumiv(df=train,y="default_flag")
+iv_analysis
+```
+
+```{r}
+information_value <- function(data_frame){
+  continuous_vars <- names(data_frame[,2:ncol(data_frame)])
+  
+  iv_df <- data.frame(VARS=c(continuous_vars), IV=numeric(length(continuous_vars)))  # init for IV results
+  
+  for(continuous_var in continuous_vars){
+    smb <- smbinning(data_frame, y="default_flag", x=continuous_var)  # WOE table
+    if(class(smb) != "character"){  # any error while calculating scores.
+      iv_df[iv_df$VARS == continuous_var, "IV"] <- smb$iv
+    }
+  }
+  
+  iv_df <- iv_df[order(-iv_df$IV), ]  # sort
+  return(iv_df)
+  rm(smb, continuous_vars)
+}
+```
+
+```{r}
+train$default_event <- as.numeric(train$default_event)
+head(train)
+
+is.numeric(train$default_flag)
+```
+```{r}
+
+```
+
+
+```{r}
+smbinning(train, y="default_event", x="loan_balance")
+
+```
+
+
+```{r}
+information_value(train)
+```
+
+
+
+```{r}
+par(mfrow=c(1,1))
+smbinning.sumiv.plot(iv_analysis,cex=1)
+```
+
+```{r fig.height=10, fig.width=10}
+# Compute Spearman rank correlation based on variables’ WOE
+# based on Table 2.2 binning scheme
+woe_vars<- train %>% dplyr::select(starts_with("woe"))
+woe_corr<- cor(as.matrix(woe_vars), method = "spearman")
+# Graphical inspection
+library(corrplot)
+
+woe_corr
+
+corrplot(woe_corr, method = "number")
+```
+
+```{r}
+train
+```
+
+```{r}
+# 4. Stepwise regression
+# 4.1 Discard highly correlated variable
+woe_vars_clean<- woe_vars %>% 
+  dplyr::select( -woe_max_arrears_bal_6m)
+```
+
+```{r}
+attach(train)
+# 4.2 Stepwise model fitting
+
+logit_full<- glm(default_event~ woe_bureau_score+ woe_annual_income+woe_emp_length+woe_max_arrears_12m +woe_months_since_recent_cc_delinq+woe_num_ccj+woe_cc_util,  
+                 family = binomial(link = "logit"), data = train)
+
+
+logit_stepwise<- stepAIC(logit_full, k=qchisq(0.05, 1, lower.tail=F), direction = "both")
+detach(train)
+
+```
+
+```{r}
+summary(logit_stepwise)
+```
+### GLM calibration: From scores to PDs
+
+Our aim is to define a new scale with
+anchor set at 660 points and log-odds doubling each 40 points. A 72:1 odds ratio is identified in line with credit bureau common practice. The following steps are performed:
+
+
+```{r}
+# Example 2.3.2 FROM SCORE TO POINTS
+
+# # 1. Define a scaling function
+
+scaled_score <- function(logit, odds, offset = 500, pdo = 20)
+  # pdo - Points to Double the Odds (PDO) => source of log(2)
+  # PDO = 20 is common due to tradition. 
+  # 20/ln(2) means that for a 20-point increase in score, the odds double.
+{
+  b = pdo/log(2)
+  a = offset - b * log(odds)
+  round(a + b*log((1 - logit)/ logit))
+}
+```
+
+```{r}
+## Score the entire dataset
+
+# 2. Score the entire dataset
+library(dplyr)
+# 2.1 Use fitted model to score both test and train datasets
+predict_logit_test <- predict(logit_stepwise, newdata = test, type = "response")
+predict_logit_train <- predict(logit_stepwise, newdata = train, type = "response")
+
+```
+
+```{r}
+# 2.2 Merge predictions with train/test data
+test$predict_logit <- predict(logit_stepwise, newdata = test, type = "response")
+train$predict_logit <- predict(logit_stepwise, newdata = train, type = "response")
+
+train$sample = "train"
+test$sample = "test"
+
+data_whole <- rbind(train, test)
+```
+
+```{r}
+train
+test
+```
+
+```{r}
+data_whole <- rbind(train, test)
+```
+
+```{r}
+data_score <- data_whole %>% dplyr:: select(id, default_event,default_flag, woe_bureau_score,
+  woe_annual_income, woe_max_arrears_12m,
+  woe_months_since_recent_cc_delinq,
+  woe_cc_util, sample, predict_logit)
+```
+
+```{r}
+# 2.3 Define scoring parameters in line with objectives
+data_score$score<- scaled_score(data_score$predict_logit, 72, 660, 40)
+data_score
+```
+
+the vast majority
+of them is concentrated on the highest score bands, corresponding to lowest credit risk
+```{r}
+hist(data_score$score)
+```
+### Calibration. 
+
+In our case, the aim of a PIT calibration is to centre average portfolio PD to its most
+recent default rate. One may perform the calibration by means of alternative functions. When
+sufficient (default) data is available, a logistic regression is commonly used. In this regard, let us assume that a scorecard was built upon a multi-year horizon, and the goal is to obtain a oneyear PIT calibration
+
+## Example 2.3.3 PD CALIBRATION
+```{r}
+# 2. Fit logistic regression
+pd_model<- glm(default_event~ score, family = binomial(link = "logit"), 
+               data = data_score)
+summary(pd_model)
+
+```
+### EXAMPLE 2.3.4 MODEL DISCRIMINATORY POWER VALIDATION
+```{r}
+#EXAMPLE 2.3.4 MODEL DISCRIMINATORY POWER VALIDATION
+
+# 1. Gini index
+
+gini_train<- Gini(train$predict_logit,
+                   train$default_event)
+
+gini_train
+```
+
+```{r}
+plotROC(train$default_event,train$predict_logit, Show.labels = T)
+
+```
+
+```{r}
+library(ROCit)
+```
+
+```{r}
+ROCit_obj <- rocit(score = train$predict_logit, class = train$default_event)
+ROCit_obj
+```
+
+```{r}
+plot(ROCit_obj)
+# Youden's J-statistic is sensitivity + specificity - 1
+# Youden's index is the probability of an informed decision (as opposed to a random guess) and takes into account all predictions.
+
+#Recommended video: How to pool ROC curves in R to better understand a model's performance (CC135)
+```
+### EXAMPLE 2.3.5 COMPARISON OF ACTUAL VERSUS FITTED PDS (BY SCORE BAND)
+```{r}
+# 1. Create a validation database
+# 1.1. Create score bands
+library(smbinning)
+
+score_cust<- smbinning.custom(as.data.frame(data_score), 
+                              y = "default_flag",
+                              x= 'score', 
+                              cuts= c(517,576,605,632,667,716,746,773))
+```
+
+```{r}
+class(score_cust)
+score_cust
+```
+```{r}
+data_score$pd <- data_score$predict_logit
+```
+
+
+```{r}
+# 1.2. Group by bands
+data_score<- smbinning.gen(data_score, 
+                           score_cust,
+                           chrname = "score_band")
+# 2. Compare actual against fitted PDs
+# 2.1. Compute mean values
+data_pd<- data_score %>%
+  dplyr::select(score, score_band, pd, default_event) %>%
+  dplyr::group_by(score_band) %>%
+  dplyr::summarise(mean_dr = round(mean(default_event),4),
+  mean_pd = round(mean(pd),4))
+# 2.2. Compute rmse
+rmse<-sqrt(mean((data_pd$mean_dr - data_pd$mean_pd)^2))
+# 0.002732317
+
+rmse
+```
+
+```{r fig.height=8, fig.width=8}
+plot(data_pd$mean_pd, type = "l", lty = 1)
+lines(data_pd$mean_dr, col = "blue", type = "b", lty = 2)
+```
+### EXAMPLE 2.3.6 CROSS-VALIDATION
+```{r}
+# 1. Prepare the cross-validation dataset
+data_subset <- data_whole %>%
+  dplyr:: select(id, default_event, default_flag, woe_bureau_score,
+woe_annual_income, woe_max_arrears_12m, woe_months_since_recent_cc_delinq, woe_cc_util, sample)
+
+```
+
+```{r}
+# 2. Perform the cross-validation loop
+# 2.1 Initialise loop arguments and vectors
+
+j <- 1 # initialise counter
+m <- 20 # number of folds
+n = floor(nrow(data_subset)/m) # size of each fold
+
+auc_vector <- rep(NA, m)
+gini_vector<- rep(NA, m)
+ks_vector<- rep(NA, m)
+
+# Run the loop
+
+for (j in 1:m)
+{
+  s1 = ((j-1)*n+1) #start of the subset (fold)
+  s2 = (j*n) # end of the subset (fold)
+data_cv_subset = s1:s2 #range of the subset (fold)
+train_set <- data_subset[-data_cv_subset, ]
+test_set <- data_subset[data_cv_subset, ]
+
+# Model Fitting
+model <- glm(default_event~ woe_bureau_score+
+woe_annual_income+woe_max_arrears_12m+
+woe_months_since_recent_cc_delinq+woe_cc_util,
+family=binomial(link = "logit"), data = train_set)
+
+# Predict results
+predict_cv <- predict(model, 
+                      newdata = test_set,
+                      type = "response")
+
+pred_obj<- ROCR::prediction(predict_cv, test_set[,2])
+perf_obj<- ROCR::performance(pred_obj, "tpr", "fpr")
+
+# Calculate performance metrics for each fold/run:
+test_auc<- ROCR::performance(pred_obj, "auc")
+auc_vector[j] <- test_auc@y.values[[1]]
+
+gini_vector[j]<- Gini(predict_cv, test_set$default_event)
+
+}
+
+```
+
+```{r}
+hist(gini_vector, breaks = 10)
+hist(auc_vector, breaks = 10)
+```
+
+```{r}
+len(predict_cv)
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
