@@ -1,0 +1,301 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+### EXAMPLE 3.2.1 DATABASE MANAGEMENT FOR ACCOUNT-LEVEL MODELLING
+```{r}
+chap3ltpdpanel <- read_excel("IFRS Chapter 3/chap3ltpdpanel.xlsx")
+```
+
+```{r}
+ltpd_panel <- chap3ltpdpanel
+ltpd_panel
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(vars)
+library(car)
+```
+Устаревший способ.
+```{r}
+ltpd_panel <- dplyr::mutate_at(ltpd_panel,
+                               vars(contains('date')),
+                               funs((as.Date(.,format = '%m/%d/%Y'))))
+```
+
+```{r}
+ltpd_panel <- ltpd_panel %>%
+  mutate(across(contains("date", ignore.case = TRUE), 
+                as.Date(format = '%m/%d/%Y'))
+
+head(ltpd_panel)
+```
+
+### Compute default rates
+```{r}
+dr_data<- ltpd_panel %>%
+dplyr::group_by(report_date, year) %>%
+dplyr::summarise(dr_QoQ = mean(default_flag)) %>%
+dplyr::select(report_date, year, dr_QoQ)
+```
+
+```{r fig.height=6, fig.width=6}
+dr_data %>% ggplot(aes(x = report_date, y  = dr_QoQ)) +
+  geom_line()+
+  geom_smooth()+
+  theme_classic()
+  geom_point(alpha = 0.1, color = "navyblue")+
+  theme(plot.title = element_text(size = 16, family  = "bell", face = "bold"),
+    axis.title = element_text(face = "bold"),
+    axis.text.x = element_text(face = "bold", size = 12),
+    axis.text.y = element_text(face = "bold", size = 12),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    panel.border = element_rect(color = "grey90", fill = NA)
+        )+
+  labs(title = "Default Rate Analysis")
+```
+### 2. Create train and test samples
+```{r}
+ltpd_subset<- ltpd_panel %>%
+  dplyr::select(id, default_ind) %>%
+  dplyr::distinct()
+# 2.1. Stratified sampling: train 70%, test 30%
+
+set.seed(2122)
+sample_id<- caret::createDataPartition(
+  ltpd_subset$default_ind,
+  p=0.7, 
+  list=FALSE)
+
+train_id<- ltpd_subset[sample_id,]
+test_id<- ltpd_subset[-sample_id,]
+# 2.2. Assign sample ID column and merge data
+```
+
+```{r}
+train_id$sample <- "train"
+test_id$sample <- "test"
+
+all_id<- rbind(train_id, test_id)
+all_id<- all_id %>%
+  dplyr::select(id, sample)
+
+# 2.3. Join with ltpd dataset
+ltpd_panel<- dplyr::left_join(ltpd_panel,
+                              all_id, by = "id")
+
+ltpd_panel$sample<- as.factor(ltpd_panel$sample)
+```
+
+
+## Portfolio-level GLM Analysis
+```{r}
+library(readxl)
+chap3drts <- read_excel("IFRS Chapter 3/chap3drts.xlsx")
+mac <- chap3drts
+
+mac$Date <- as.Date(mac$Date,format = '%d/%m/%Y')
+head(mac)
+```
+
+```{r}
+scatter_fun = function(x, y) {
+     ggplot(mac, aes(x = .data[[x]], y = .data[[y]]) ) +
+          geom_point() +
+          geom_smooth(method = "loess", se = FALSE, color = "grey74") +
+          theme_bw()
+}
+```
+
+```{r}
+columns_to_plot = set_names(names(mac)[2:7])
+```
+
+
+```{r}
+elev_plots = map(columns_to_plot, ~scatter_fun("Date", .x) )
+elev_plots
+```
+
+
+```{r}
+# 2. KPSS testing
+library(tseries)
+kpss.test(mac$dr, null = "Level", lshort = TRUE)
+# p-value < 0.01
+kpss.test(mac$dr, null = "Trend", lshort = TRUE)
+# p-value = 0.02023
+```
+# 3. Fit regression model
+# 3.1. Data preparation
+```{r}
+dr_t <- as.matrix(mac[5:nrow(mac),2])
+gdp_tlag <- as.matrix(mac[1:(nrow(mac)-4),3])
+uer_t <- as.matrix(mac[5:nrow(mac),4])
+xx <- as.data.frame(cbind(dr_t,gdp_tlag,uer_t)/100)
+colnames(xx) <- c("dr_tt","gdp_ttlag", "uer_tt")
+```
+
+```{r}
+fit <- lm(dr_tt~gdp_ttlag+uer_tt,data=xx)
+summary(fit)
+```
+
+```{r fig.height=7, fig.width=7}
+par(mfrow=c(1,2))
+residualPlot(fit)
+qqPlot(fit)
+
+```
+
+```{r}
+dr_fit <- predict(fit, xx)
+
+```
+
+```{r}
+plot(dr_t/100, type = "l", lty = 2)
+lines(dr_fit, col = "blue", type = "b", lty = 3)
+```
+
+```{r}
+mac$Date
+```
+### Survival Analysis
+link: https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html
+
+```{r}
+kmdef <- read_excel("IFRS Chapter 3/chap3kaplanmeier.xlsx")
+# kmdef <- chap3kaplanmeier 
+head(kmdef)
+```
+
+```{r}
+library(survival)
+library(survminer)
+```
+
+```{r}
+Surv(kmdef$Time, kmdef$Status)
+```
+
+```{r}
+f1 <- survfit(Surv(Time, Status) ~ 1, data = kmdef)
+names(f1)
+```
+```{r}
+summary(f1)
+```
+
+```{r fig.height=6, fig.width=6}
+ggsurvplot(fit = survfit(Surv(Time, Status) ~ 1, data = kmdef), 
+    xlab = "Days", 
+    ylab = "Overall survival probability")
+```
+### CPH Survival Analysis
+```{r}
+chap3coxphx <- read_excel("IFRS Chapter 3/chap3coxphx.xlsx")
+head(chap3coxphx)
+coxphdef <- chap3coxphx
+```
+
+```{r}
+f1 <- survfit(Surv(Time, Status) ~ 1, data = coxphdef)
+
+ggsurvplot(fit = survfit(Surv(Time, Status) ~ 1, data = coxphdef), 
+    xlab = "Days", 
+    ylab = "Overall survival probability")
+```
+
+```{r}
+km.fit <- survfit(Surv(Time, Status) ~ Product, data = coxphdef)
+summary(km.fit)
+ggsurvplot(survfit(Surv(Time, Status) ~ Product, data = coxphdef))
+```
+#### Fit CPH Survival Function
+
+```{r}
+coxph.surv <- Surv(coxphdef$Time, coxphdef$Status)
+```
+
+```{r}
+coxph.fit <- coxph(coxph.surv ~ coxphdef$Product , method="breslow")
+```
+
+```{r}
+summary(coxph.fit)
+```
+
+```{r}
+ggsurvplot(fit = survfit(Surv(Time, Status) ~ Product, data = coxphdef), 
+    xlab = "Days", 
+    ylab = "Overall survival probability")
+```
+
+```{r}
+summary(coxphdef)
+```
+### EXAMPLE 3.4.4 CPH SURVIVAL ANALYSIS
+```{r}
+# 1. Create train and test samples
+# 1.1. Create variable seasoning
+ltpd_panel$seasoning<-
+  dplyr::if_else(ltpd_panel$remaining_term> 36,1,0)
+
+train_survcph<- ltpd_panel %>%
+  dplyr::filter(sample == "train")
+
+test_survcph<- ltpd_panel %>%
+  dplyr::filter(sample == "test")
+```
+
+```{r}
+head(train_survcph)
+```
+Какая-то ошибка
+```{r}
+fit_coxph <- coxph(Surv(start_time, end_time, default_flag) ~ 
+        ltv_utd + seasoning + hpi, data = train_survcph, method = "efron")
+
+summary(fit_coxph)
+```
+
+### 3.4.3 AFT SURVIVAL ANALYSIS
+```{r}
+# 1. Fit Weibull survival function
+library(flexsurv)
+fit_weib<- flexsurvreg(Surv(start_time,end_time,default_flag,
+                            type = "interval") ~ ltv_utd+
+                         seasoning + hpi+ ir,
+                       dist = "weibull", 
+                       data = train_survcph)
+```
+
+```{r}
+print(cox.zph(fit_coxph))
+```
+
+```{r}
+plot(cox.zph(fit_coxph))
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+vv
